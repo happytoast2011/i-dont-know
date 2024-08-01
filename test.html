@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini API Example with Leaflet, City Pictures, and Videos</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            height: 100vh;
+            background-color: #f0f0f0;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            width: 300px;
+        }
+        input, button {
+            margin-bottom: 10px;
+            padding: 10px;
+            font-size: 16px;
+        }
+        #output, #location, #videos, #images {
+            padding: 10px;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            min-height: 50px;
+            margin-bottom: 10px;
+        }
+        #map {
+            margin-top: 20px;
+            width: 100%;
+            height: 400px;
+        }
+        .custom-icon {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .custom-icon img {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+        }
+        .custom-icon span {
+            font-size: 12px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <input type="text" id="inputField" placeholder="Enter text here">
+        <button onclick="getGeminiResponse()">Submit</button>
+        <button onclick="generateImage()">Generate Image</button>
+        <div id="output"></div>
+        <div id="location"></div>
+        <div id="videos"></div>
+        <div id="images">
+            <img id="generatedImage" src="" alt="Generated Image" style="display:none; width: 100px; height: 100px;">
+        </div>
+        <div id="map"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        let map;
+
+        function initMap() {
+            map = L.map('map').setView([51.505, -0.09], 2);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '© OpenStreetMap'
+            }).addTo(map);
+        }
+
+        async function getGeminiResponse() {
+            const input = document.getElementById('inputField').value;
+
+            try {
+                const response = await fetch('/ai-response', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ input: input })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    const generatedText = data.response;
+                    document.getElementById('output').textContent = generatedText;
+
+                    const detectedCities = await detectCities(generatedText);
+                    if (detectedCities.length > 0) {
+                        document.getElementById('location').textContent = detectedCities.join(', ');
+                        showMap(detectedCities);
+                    } else {
+                        document.getElementById('location').textContent = '';
+                        map.setView([51.505, -0.09], 2);
+                        clearMarkers();
+                    }
+
+                    fetchVideos(input);  // Search videos related to the user input
+                } else {
+                    document.getElementById('output').textContent = `Error: ${data.error}`;
+                }
+            } catch (error) {
+                document.getElementById('output').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function generateImage() {
+            const input = document.getElementById('inputField').value;
+
+            try {
+                const response = await fetch('/generate-image', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ prompt: input })
+                });
+
+                const data = await response.json();
+                if (response.ok && data.status === 'success') {
+                    // Delay to ensure the image is generated and saved on the server
+                    setTimeout(() => {
+                        const imgElement = document.getElementById('generatedImage');
+                        imgElement.src = '/output_image.jpg';
+                        imgElement.style.display = 'block';
+                    }, 5000); // 5 seconds delay
+                } else {
+                    document.getElementById('images').textContent = `Error: ${data.error}`;
+                }
+            } catch (error) {
+                document.getElementById('images').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function detectCities(text) {
+            const words = text.split(/\s+/);
+            const ignoreList = ["capital", "region", "best", "give", "like", "often", "expanse", "our", "everyday", "there", "canvas", "most", "around", "time", "confines", "glide", "lies", "frontier", "power"];
+            const detectedCities = [];
+            for (const word of words) {
+                if (!ignoreList.includes(word.toLowerCase())) {
+                    const city = await fetchCityName(word);
+                    if (city && !detectedCities.includes(city)) {
+                        detectedCities.push(city);
+                    }
+                }
+            }
+            return detectedCities;
+        }
+
+        async function fetchCityName(query) {
+            try {
+                const response = await fetch(`https://secure.geonames.org/searchJSON?q=${query}&maxRows=1&username=kode`);
+                const data = await response.json();
+                if (data.geonames.length > 0 && data.geonames[0].name.toLowerCase() === query.toLowerCase()) {
+                    return data.geonames[0].name;
+                }
+            } catch (error) {
+                console.error('Error fetching city name:', error);
+            }
+            return null;
+        }
+
+        function showMap(cities) {
+            clearMarkers();
+            cities.forEach(async (city) => {
+                const response = await fetch(`https://secure.geonames.org/searchJSON?q=${city}&maxRows=1&username=kode`);
+                const data = await response.json();
+                if (data.geonames.length > 0) {
+                    const lat = data.geonames[0].lat;
+                    const lng = data.geonames[0].lng;
+                    const marker = L.marker([lat, lng]).addTo(map);
+                    marker.bindPopup(city).openPopup();
+                }
+            });
+        }
+
+        function clearMarkers() {
+            map.eachLayer((layer) => {
+                if (layer instanceof L.Marker) {
+                    map.removeLayer(layer);
+                }
+            });
+        }
+
+        async function fetchVideos(query) {
+            try {
+                const response = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&type=video&key=AIzaSyCY5gS2qT2c3voA4kourPkLw2qgyeZwKQ4`);
+                const data = await response.json();
+                const videosDiv = document.getElementById('videos');
+                videosDiv.innerHTML = '';
+                data.items.forEach(item => {
+                    const videoUrl = `https://www.youtube.com/watch?v=${item.id.videoId}`;
+                    const videoTitle = item.snippet.title;
+                    const videoLink = document.createElement('a');
+                    videoLink.href = videoUrl;
+                    videoLink.textContent = videoTitle;
+                    videoLink.target = "_blank";
+                    videosDiv.appendChild(videoLink);
+                    videosDiv.appendChild(document.createElement('br'));
+                });
+            } catch (error) {
+                console.error('Error fetching videos:', error);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', initMap);
+    </script>
+</body>
+</html>
